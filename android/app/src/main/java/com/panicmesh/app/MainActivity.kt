@@ -1,4 +1,4 @@
-package com.panicmesh
+package com.panicmesh.app
 
 import android.os.Build
 import android.os.Bundle

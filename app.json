@@ -2,6 +2,33 @@
   "expo": {
     "name": "panic-mesh",
     "slug": "panic-mesh",
-    "version": "1.0.0"
+    "version": "1.0.0",
+    "android": {
+      "package": "com.panicmesh.app",
+      "compileSdkVersion": 34,
+      "targetSdkVersion": 34,
+      "buildToolsVersion": "34.0.0",
+      "permissions": [
+        "BLUETOOTH",
+        "BLUETOOTH_ADMIN",
+        "BLUETOOTH_SCAN",
+        "BLUETOOTH_ADVERTISE",
+        "BLUETOOTH_CONNECT",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "NEARBY_WIFI_DEVICES"
+      ]
+    },
+    "plugins": [
+      "expo-location",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "enableDesugarLib": true
+          }
+        }
+      ]
+    ]
   }
 }
