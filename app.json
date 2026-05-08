@@ -8,6 +8,11 @@
       "compileSdkVersion": 34,
       "targetSdkVersion": 34,
       "buildToolsVersion": "34.0.0",
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyAxQukLDxRLg-gsvWbTzBHHBNfdWZ3ALkY"
+        }
+      },
       "permissions": [
         "BLUETOOTH",
         "BLUETOOTH_ADMIN",

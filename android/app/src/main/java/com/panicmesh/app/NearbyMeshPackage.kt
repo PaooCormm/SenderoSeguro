@@ -7,7 +7,10 @@ import com.facebook.react.uimanager.ViewManager
 
 class NearbyMeshPackage : ReactPackage {
   override fun createNativeModules(reactContext: ReactApplicationContext): MutableList<NativeModule> {
-    return mutableListOf(NearbyMeshModule(reactContext))
+    return mutableListOf(
+      NearbyMeshModule(reactContext),
+      NativeLocationModule(reactContext)
+    )
   }
 
   override fun createViewManagers(

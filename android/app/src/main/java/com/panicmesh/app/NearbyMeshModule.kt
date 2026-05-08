@@ -5,19 +5,33 @@ import com.facebook.react.modules.core.DeviceEventManagerModule
 import com.google.android.gms.common.ConnectionResult
 import com.google.android.gms.nearby.Nearby
 import com.google.android.gms.nearby.connection.*
+import org.json.JSONObject
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 
 class NearbyMeshModule(private val reactContext: ReactApplicationContext) :
   ReactContextBaseJavaModule(reactContext) {
 
   private val connectionsClient: ConnectionsClient = Nearby.getConnectionsClient(reactContext)
   private val connectedEndpoints = ConcurrentHashMap.newKeySet<String>()
+  private val seenMessageIds = ConcurrentHashMap.newKeySet<String>()
   private var localNodeId: String = ""
   private val serviceId: String
     get() = reactContext.packageName
 
+  private val cleanupScheduler: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
+  private val DEFAULT_TTL = 5
+
   override fun getName(): String = "NearbyMeshModule"
+
+  init {
+    cleanupScheduler.scheduleAtFixedRate({
+      seenMessageIds.clear()
+    }, 60, 60, TimeUnit.SECONDS)
+  }
 
   private fun sendEvent(name: String, params: WritableMap? = null) {
     reactContext
@@ -32,24 +46,58 @@ class NearbyMeshModule(private val reactContext: ReactApplicationContext) :
   }
 
   private fun shouldInitiateConnection(remoteEndpointName: String): Boolean {
-    // Evita que ambos lados pidan conexión al mismo tiempo entre el mismo par.
     return localNodeId < remoteEndpointName
+  }
+
+  private fun forwardPayload(originalPayload: ByteArray, fromEndpointId: String) {
+    val json = String(originalPayload, StandardCharsets.UTF_8)
+    val obj = try {
+      JSONObject(json)
+    } catch (e: Exception) {
+      return
+    }
+
+    val messageId = obj.optString("messageId")
+    if (messageId.isEmpty() || seenMessageIds.contains(messageId)) {
+      return
+    }
+    seenMessageIds.add(messageId)
+
+    val ttl = obj.optInt("ttl", DEFAULT_TTL)
+    if (ttl <= 0) {
+      return
+    }
+
+    obj.put("ttl", ttl - 1)
+    obj.put("hops", obj.optInt("hops", 0) + 1)
+    val forwardedBytes = obj.toString().toByteArray(StandardCharsets.UTF_8)
+
+    connectedEndpoints.forEach { endpointId ->
+      if (endpointId != fromEndpointId) {
+        connectionsClient.sendPayload(endpointId, Payload.fromBytes(forwardedBytes))
+          .addOnFailureListener {
+            errorEvent("Falló reenvío a $endpointId: ${it.message}")
+          }
+      }
+    }
   }
 
   private val payloadCallback = object : PayloadCallback() {
     override fun onPayloadReceived(endpointId: String, payload: Payload) {
       if (payload.type == Payload.Type.BYTES) {
-        val bytes = payload.asBytes()
-        val text = bytes?.toString(StandardCharsets.UTF_8) ?: return
+        val bytes = payload.asBytes() ?: return
+        val text = bytes.toString(StandardCharsets.UTF_8)
+
         val map = Arguments.createMap()
         map.putString("endpointId", endpointId)
         map.putString("payload", text)
         sendEvent("payload_received", map)
+
+        forwardPayload(bytes, endpointId)
       }
     }
 
     override fun onPayloadTransferUpdate(endpointId: String, update: PayloadTransferUpdate) {
-      // Para BYTES no hace falta nada extra en esta fase 1.
     }
   }
 
@@ -159,6 +207,7 @@ class NearbyMeshModule(private val reactContext: ReactApplicationContext) :
       connectionsClient.stopDiscovery()
       connectionsClient.stopAllEndpoints()
       connectedEndpoints.clear()
+      seenMessageIds.clear()
       promise.resolve(true)
     } catch (e: Exception) {
       promise.reject("STOP_ERROR", e)
@@ -167,17 +216,32 @@ class NearbyMeshModule(private val reactContext: ReactApplicationContext) :
 
   @ReactMethod
   fun sendAlert(payloadJson: String, promise: Promise) {
+    val json = try {
+      JSONObject(payloadJson)
+    } catch (e: Exception) {
+      promise.reject("JSON_ERROR", "Payload inválido: ${e.message}")
+      return
+    }
+
+    json.put("messageId", "${localNodeId}_${System.currentTimeMillis()}_${(Math.random() * 10000).toInt()}")
+    json.put("ttl", DEFAULT_TTL)
+    json.put("hops", 0)
+
+    val finalPayload = json.toString()
+    val bytes = finalPayload.toByteArray(StandardCharsets.UTF_8)
+
+    val messageId = json.getString("messageId")
+    seenMessageIds.add(messageId)
+
     if (connectedEndpoints.isEmpty()) {
       promise.reject("NO_ENDPOINTS", "No hay dispositivos conectados.")
       return
     }
 
-    val bytes = payloadJson.toByteArray(StandardCharsets.UTF_8)
-
     connectedEndpoints.forEach { endpointId ->
       connectionsClient.sendPayload(endpointId, Payload.fromBytes(bytes))
         .addOnFailureListener {
-          errorEvent("Falló envío a $endpointId: ${it.message}")
+          errorEvent("Fallo envío a $endpointId: ${it.message}")
         }
     }
 

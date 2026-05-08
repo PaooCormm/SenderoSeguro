@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -8,8 +8,13 @@ import {
   PermissionsAndroid,
   Platform,
   Alert,
+  NativeEventEmitter,
 } from 'react-native';
+import MapView, { Marker, PROVIDER_DEFAULT } from 'react-native-maps';
 import NearbyMesh from './src/services/NearbyMesh';
+import { NativeModules } from 'react-native';
+
+const { NativeLocationModule } = NativeModules;
 
 function createNodeId() {
   return `node-${Math.random().toString(36).slice(2, 8)}`;
@@ -21,6 +26,11 @@ export default function App() {
   const [connectedCount, setConnectedCount] = useState(0);
   const [logs, setLogs] = useState([]);
   const [alerts, setAlerts] = useState([]);
+  const [lastLocation, setLastLocation] = useState(null);
+  const [locationGranted, setLocationGranted] = useState(false);
+  const [mapRegion, setMapRegion] = useState(null);
+  const hasCenteredRef = useRef(false);
+  const locationSubRef = useRef(null);
 
   const log = (msg) => {
     const time = new Date().toLocaleTimeString();
@@ -76,6 +86,58 @@ export default function App() {
 
   const [starting, setStarting] = useState(false);
 
+  const ensureLocationPermission = async () => {
+    try {
+      const result = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION
+      );
+      const granted = result === PermissionsAndroid.RESULTS.GRANTED;
+      setLocationGranted(granted);
+      if (!granted) {
+        log('Permiso de ubicación no concedido.');
+      }
+      return granted;
+    } catch (e) {
+      log(`Error solicitando ubicación: ${e?.message ?? String(e)}`);
+      return false;
+    }
+  };
+
+  const getLastKnownLocation = async () => {
+    try {
+      const loc = await NativeLocationModule.getLastKnownLocation();
+      if (loc) {
+        return {
+          coords: {
+            latitude: loc.latitude,
+            longitude: loc.longitude,
+            accuracy: loc.accuracy,
+          },
+          timestamp: loc.timestamp,
+        };
+      }
+    } catch (e) {
+      log(`Error ubicacion previa: ${e?.message ?? String(e)}`);
+    }
+    return null;
+  };
+
+  const getFreshLocation = async (timeoutMs = 2000) => {
+    try {
+      const loc = await NativeLocationModule.getCurrentLocation(timeoutMs);
+      return {
+        coords: {
+          latitude: loc.latitude,
+          longitude: loc.longitude,
+          accuracy: loc.accuracy,
+        },
+        timestamp: loc.timestamp,
+      };
+    } catch (e) {
+      return null;
+    }
+  };
+
   const startMesh = async () => {
     if (starting || ready) return;
 
@@ -110,15 +172,70 @@ export default function App() {
   };
 
   const sendPanic = async () => {
+    let freshLocation = null;
+    let fallbackLocation = lastLocation;
+
+    if (!locationGranted) {
+      const granted = await ensureLocationPermission();
+      if (!granted) {
+        const payload = {
+          type: 'PANIC',
+          alertId: `${nodeId}-${Date.now()}`,
+          from: nodeId,
+          timestamp: Date.now(),
+          location: null,
+        };
+
+        try {
+          await NearbyMesh.sendAlert(payload);
+          log(`Alerta emitida: ${payload.alertId}`);
+        } catch (e) {
+          log(`Error al enviar alerta: ${e?.message ?? String(e)}`);
+        }
+        return;
+      }
+    }
+
+    freshLocation = await getFreshLocation(2000);
+    if (!freshLocation) {
+      log('Ubicación fresca no disponible, usando última conocida.');
+    }
+
+    if (!fallbackLocation) {
+      fallbackLocation = await getLastKnownLocation();
+    }
+
+    const chosenLocation = freshLocation ?? fallbackLocation;
     const payload = {
       type: 'PANIC',
       alertId: `${nodeId}-${Date.now()}`,
       from: nodeId,
       timestamp: Date.now(),
+      location: chosenLocation
+        ? {
+            latitude: chosenLocation.coords.latitude,
+            longitude: chosenLocation.coords.longitude,
+            accuracy: chosenLocation.coords.accuracy,
+            locationTimestamp: chosenLocation.timestamp,
+            source: freshLocation ? 'fresh' : 'last_known',
+          }
+        : null,
     };
 
     try {
       await NearbyMesh.sendAlert(payload);
+      if (chosenLocation) {
+        setLastLocation(chosenLocation);
+        if (!hasCenteredRef.current) {
+          setMapRegion({
+            latitude: chosenLocation.coords.latitude,
+            longitude: chosenLocation.coords.longitude,
+            latitudeDelta: 0.01,
+            longitudeDelta: 0.01,
+          });
+          hasCenteredRef.current = true;
+        }
+      }
       log(`Alerta emitida: ${payload.alertId}`);
     } catch (e) {
       log(`Error al enviar alerta: ${e?.message ?? String(e)}`);
@@ -126,6 +243,46 @@ export default function App() {
   };
 
   useEffect(() => {
+    const bootstrapLocation = async () => {
+      const granted = await ensureLocationPermission();
+      if (!granted) return;
+      const lastKnown = await getLastKnownLocation();
+      if (lastKnown) {
+        setLastLocation(lastKnown);
+        if (!hasCenteredRef.current) {
+          setMapRegion({
+            latitude: lastKnown.coords.latitude,
+            longitude: lastKnown.coords.longitude,
+            latitudeDelta: 0.01,
+            longitudeDelta: 0.01,
+          });
+          hasCenteredRef.current = true;
+        }
+      }
+
+      if (!locationSubRef.current) {
+        const emitter = new NativeEventEmitter(NativeLocationModule);
+        locationSubRef.current = emitter.addListener('location_update', (loc) => {
+          if (!loc) return;
+          setLastLocation({
+            coords: {
+              latitude: loc.latitude,
+              longitude: loc.longitude,
+              accuracy: loc.accuracy,
+            },
+            timestamp: loc.timestamp,
+          });
+        });
+
+        NativeLocationModule.startContinuousUpdates(2000, 2)
+          .then(() => log('Ubicación en tiempo real activa.'))
+          .catch((e) =>
+            log(`No se pudo iniciar ubicación en tiempo real: ${e?.message ?? e}`)
+          );
+      }
+    };
+
+    bootstrapLocation();
     const subs = [
       NearbyMesh.addListener('mesh_started', (event) => {
         log(`Mesh iniciado con serviceId: ${event?.serviceId}`);
@@ -151,6 +308,19 @@ export default function App() {
           if (alert?.type === 'PANIC') {
             setAlerts((prev) => [alert, ...prev].slice(0, 20));
             log(`ALERTA recibida de ${alert?.from}`);
+            if (
+              !hasCenteredRef.current &&
+              alert?.location?.latitude &&
+              alert?.location?.longitude
+            ) {
+              setMapRegion({
+                latitude: alert.location.latitude,
+                longitude: alert.location.longitude,
+                latitudeDelta: 0.01,
+                longitudeDelta: 0.01,
+              });
+              hasCenteredRef.current = true;
+            }
           }
         } catch (e) {
           log(`Payload inválido recibido: ${event?.payload}`);
@@ -165,6 +335,9 @@ export default function App() {
 
     return () => {
       subs.forEach((s) => s?.remove?.());
+      locationSubRef.current?.remove?.();
+      locationSubRef.current = null;
+      NativeLocationModule.stopContinuousUpdates().catch(() => {});
       NearbyMesh.stopMesh().catch(() => {});
     };
   }, []);
@@ -172,6 +345,49 @@ export default function App() {
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Panic Mesh — Fase 1</Text>
+
+      <View style={styles.mapCard}>
+        <MapView
+          provider={PROVIDER_DEFAULT}
+          style={styles.map}
+          region={
+            mapRegion ?? {
+              latitude: 19.4326,
+              longitude: -99.1332,
+              latitudeDelta: 0.1,
+              longitudeDelta: 0.1,
+            }
+          }
+          onRegionChangeComplete={(region) => setMapRegion(region)}
+          showsUserLocation={false}
+        >
+          {lastLocation && (
+            <Marker
+              title="Tu ubicación"
+              coordinate={{
+                latitude: lastLocation.coords.latitude,
+                longitude: lastLocation.coords.longitude,
+              }}
+              pinColor="#22c55e"
+            />
+          )}
+
+          {alerts
+            .filter((a) => a?.location?.latitude && a?.location?.longitude)
+            .map((a) => (
+              <Marker
+                key={a.alertId}
+                title="Alerta de pánico"
+                description={`De: ${a.from}`}
+                coordinate={{
+                  latitude: a.location.latitude,
+                  longitude: a.location.longitude,
+                }}
+                pinColor="#ef4444"
+              />
+            ))}
+        </MapView>
+      </View>
 
       <View style={styles.card}>
         <Text style={styles.label}>Estado</Text>
@@ -255,6 +471,18 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     padding: 16,
     marginBottom: 16,
+  },
+  mapCard: {
+    backgroundColor: '#0b1220',
+    borderRadius: 16,
+    padding: 8,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#1f2937',
+  },
+  map: {
+    height: 220,
+    borderRadius: 12,
   },
   label: {
     color: '#98a2b3',
