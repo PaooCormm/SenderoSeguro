@@ -1,13 +1,15 @@
 {
   "expo": {
-    "name": "panic-mesh",
+    "name": "Sendero Seguro",
     "slug": "panic-mesh",
     "version": "1.0.0",
+    "icon": "./assets/icon.png",
     "android": {
       "package": "com.panicmesh.app",
-      "compileSdkVersion": 34,
+      "newArchEnabled": false, 
+      "compileSdkVersion": 35,
       "targetSdkVersion": 34,
-      "buildToolsVersion": "34.0.0",
+      "buildToolsVersion": "35.0.0",
       "config": {
         "googleMaps": {
           "apiKey": "AIzaSyAxQukLDxRLg-gsvWbTzBHHBNfdWZ3ALkY"
@@ -34,6 +36,11 @@
           }
         }
       ]
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "42e8f6f8-1284-40e2-9fd5-d1245f9832a8"
+      }
+    }
   }
 }

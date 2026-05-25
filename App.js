@@ -1,577 +1,105 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+/**
+ * App.js — Punto de entrada SSEGURO
+ *
+ * Cambios respecto a la versión anterior:
+ *  - AppNavigator espera loading=false antes de navegar
+ *    (evita flash de LoginScreen y pantalla en blanco)
+ *  - Splash/loading spinner mientras AuthContext verifica sesión
+ */
+import React from 'react';
 import {
-  View,
-  Text,
-  TouchableOpacity,
+  ActivityIndicator,
+  StatusBar,
   StyleSheet,
-  ScrollView,
-  PermissionsAndroid,
-  Platform,
-  Alert,
-  NativeEventEmitter,
+  Text,
+  View,
 } from 'react-native';
-import MapView, { Marker, PROVIDER_DEFAULT } from 'react-native-maps';
-import NearbyMesh from './src/services/NearbyMesh';
-import { NativeModules } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { AuthProvider, useAuth } from './src/context/AuthContext';
+import { LoginScreen }     from './src/screens/LoginScreen';
+import { DashboardScreen } from './src/screens/DashboardScreen';
 
-const { NativeLocationModule } = NativeModules;
-
-function createNodeId() {
-  return `node-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-export default function App() {
-  const nodeId = useMemo(() => createNodeId(), []);
-  const [ready, setReady] = useState(false);
-  const [connectedCount, setConnectedCount] = useState(0);
-  const [logs, setLogs] = useState([]);
-  const [alerts, setAlerts] = useState([]);
-  const [lastLocation, setLastLocation] = useState(null);
-  const [locationGranted, setLocationGranted] = useState(false);
-  const [mapRegion, setMapRegion] = useState(null);
-  const hasCenteredRef = useRef(false);
-  const locationSubRef = useRef(null);
-
-  const log = (msg) => {
-    const time = new Date().toLocaleTimeString();
-    setLogs((prev) => [`[${time}] ${msg}`, ...prev].slice(0, 120));
-  };
-
-  const requestPermissions = async () => {
-    if (Platform.OS !== 'android') {
-      Alert.alert('Solo Android', 'Esta fase 1 está preparada solo para Android.');
-      return false;
-    }
-
-    const perms = [
-      PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-      PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
-
-    ];
-
-    if (Platform.Version >= 33) {
-      if (PermissionsAndroid.PERMISSIONS.NEARBY_WIFI_DEVICES) {
-        perms.push(PermissionsAndroid.PERMISSIONS.NEARBY_WIFI_DEVICES);
-      }
-      perms.push(
-        PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
-        PermissionsAndroid.PERMISSIONS.BLUETOOTH_ADVERTISE,
-        PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT
-      );
-    } else if (Platform.Version >= 31) {
-      perms.push(
-        PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
-        PermissionsAndroid.PERMISSIONS.BLUETOOTH_ADVERTISE,
-        PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-        PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION
-      );
-    } else {
-      perms.push(PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION);
-      perms.push(PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION);
-    }
-
-    const result = await PermissionsAndroid.requestMultiple(perms);
-    const denied = Object.entries(result).filter(
-      ([, value]) => value !== PermissionsAndroid.RESULTS.GRANTED
-    );
-
-    if (denied.length > 0) {
-      denied.forEach(([key]) => log(`Permiso no concedido: ${key}`));
-      return false;
-    }
-
-    return true;
-  };
-
-  const [starting, setStarting] = useState(false);
-
-  const ensureLocationPermission = async () => {
-    try {
-      const result = await PermissionsAndroid.request(
-        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION
-      );
-      const granted = result === PermissionsAndroid.RESULTS.GRANTED;
-      setLocationGranted(granted);
-      if (!granted) {
-        log('Permiso de ubicación no concedido.');
-      }
-      return granted;
-    } catch (e) {
-      log(`Error solicitando ubicación: ${e?.message ?? String(e)}`);
-      return false;
-    }
-  };
-
-  const getLastKnownLocation = async () => {
-    try {
-      const loc = await NativeLocationModule.getLastKnownLocation();
-      if (loc) {
-        return {
-          coords: {
-            latitude: loc.latitude,
-            longitude: loc.longitude,
-            accuracy: loc.accuracy,
-          },
-          timestamp: loc.timestamp,
-        };
-      }
-    } catch (e) {
-      log(`Error ubicacion previa: ${e?.message ?? String(e)}`);
-    }
-    return null;
-  };
-
-  const getFreshLocation = async (timeoutMs = 2000) => {
-    try {
-      const loc = await NativeLocationModule.getCurrentLocation(timeoutMs);
-      return {
-        coords: {
-          latitude: loc.latitude,
-          longitude: loc.longitude,
-          accuracy: loc.accuracy,
-        },
-        timestamp: loc.timestamp,
-      };
-    } catch (e) {
-      return null;
-    }
-  };
-
-  const startMesh = async () => {
-    if (starting || ready) return;
-
-    setStarting(true);
-    try {
-      const ok = await requestPermissions();
-      if (!ok) {
-        log('No se pudo iniciar la red local por permisos faltantes.');
-        return;
-      }
-
-      await NearbyMesh.stopMesh().catch(() => {});
-      await NearbyMesh.startMesh(nodeId);
-      setReady(true);
-      log(`Red local activa. Mi nodeId: ${nodeId}`);
-    } catch (e) {
-      log(`Error al iniciar red local: ${e?.message ?? String(e)}`);
-    } finally {
-      setStarting(false);
-    }
-  };
-
-  const stopMesh = async () => {
-    try {
-      await NearbyMesh.stopMesh();
-      setReady(false);
-      setConnectedCount(0);
-      log('Red local detenida.');
-    } catch (e) {
-      log(`Error al detener red local: ${e?.message ?? String(e)}`);
-    }
-  };
-
-  const sendPanic = async () => {
-    let freshLocation = null;
-    let fallbackLocation = lastLocation;
-
-    if (!locationGranted) {
-      const granted = await ensureLocationPermission();
-      if (!granted) {
-        const payload = {
-          type: 'PANIC',
-          alertId: `${nodeId}-${Date.now()}`,
-          from: nodeId,
-          timestamp: Date.now(),
-          location: null,
-        };
-
-        try {
-          await NearbyMesh.sendAlert(payload);
-          log(`Alerta emitida: ${payload.alertId}`);
-        } catch (e) {
-          log(`Error al enviar alerta: ${e?.message ?? String(e)}`);
-        }
-        return;
-      }
-    }
-
-    freshLocation = await getFreshLocation(2000);
-    if (!freshLocation) {
-      log('Ubicación fresca no disponible, usando última conocida.');
-    }
-
-    if (!fallbackLocation) {
-      fallbackLocation = await getLastKnownLocation();
-    }
-
-    const chosenLocation = freshLocation ?? fallbackLocation;
-    const payload = {
-      type: 'PANIC',
-      alertId: `${nodeId}-${Date.now()}`,
-      from: nodeId,
-      timestamp: Date.now(),
-      location: chosenLocation
-        ? {
-            latitude: chosenLocation.coords.latitude,
-            longitude: chosenLocation.coords.longitude,
-            accuracy: chosenLocation.coords.accuracy,
-            locationTimestamp: chosenLocation.timestamp,
-            source: freshLocation ? 'fresh' : 'last_known',
-          }
-        : null,
-    };
-
-    try {
-      await NearbyMesh.sendAlert(payload);
-      if (chosenLocation) {
-        setLastLocation(chosenLocation);
-        if (!hasCenteredRef.current) {
-          setMapRegion({
-            latitude: chosenLocation.coords.latitude,
-            longitude: chosenLocation.coords.longitude,
-            latitudeDelta: 0.01,
-            longitudeDelta: 0.01,
-          });
-          hasCenteredRef.current = true;
-        }
-      }
-      log(`Alerta emitida: ${payload.alertId}`);
-    } catch (e) {
-      log(`Error al enviar alerta: ${e?.message ?? String(e)}`);
-    }
-  };
-
-  useEffect(() => {
-    const bootstrapLocation = async () => {
-      const granted = await ensureLocationPermission();
-      if (!granted) return;
-      const lastKnown = await getLastKnownLocation();
-      if (lastKnown) {
-        setLastLocation(lastKnown);
-        if (!hasCenteredRef.current) {
-          setMapRegion({
-            latitude: lastKnown.coords.latitude,
-            longitude: lastKnown.coords.longitude,
-            latitudeDelta: 0.01,
-            longitudeDelta: 0.01,
-          });
-          hasCenteredRef.current = true;
-        }
-      }
-
-      if (!locationSubRef.current) {
-        const emitter = new NativeEventEmitter(NativeLocationModule);
-        locationSubRef.current = emitter.addListener('location_update', (loc) => {
-          if (!loc) return;
-          setLastLocation({
-            coords: {
-              latitude: loc.latitude,
-              longitude: loc.longitude,
-              accuracy: loc.accuracy,
-            },
-            timestamp: loc.timestamp,
-          });
-        });
-
-        NativeLocationModule.startContinuousUpdates(2000, 2)
-          .then(() => log('Ubicación en tiempo real activa.'))
-          .catch((e) =>
-            log(`No se pudo iniciar ubicación en tiempo real: ${e?.message ?? e}`)
-          );
-      }
-    };
-
-    bootstrapLocation();
-    const subs = [
-      NearbyMesh.addListener('mesh_started', (event) => {
-        log(`Mesh iniciado con serviceId: ${event?.serviceId}`);
-      }),
-      NearbyMesh.addListener('endpoint_found', (event) => {
-        log(`Encontrado: ${event?.endpointName} (${event?.endpointId})`);
-      }),
-      NearbyMesh.addListener('connection_result', (event) => {
-        setConnectedCount(event?.connectedCount ?? 0);
-        log(
-          event?.success
-            ? `Conectado con ${event?.endpointId}. Total: ${event?.connectedCount}`
-            : `Falló conexión con ${event?.endpointId}`
-        );
-      }),
-      NearbyMesh.addListener('endpoint_disconnected', (event) => {
-        setConnectedCount(event?.connectedCount ?? 0);
-        log(`Desconectado ${event?.endpointId}. Total: ${event?.connectedCount}`);
-      }),
-      NearbyMesh.addListener('payload_received', (event) => {
-        try {
-          const alert = JSON.parse(event?.payload ?? '{}');
-          if (alert?.type === 'PANIC') {
-            setAlerts((prev) => [alert, ...prev].slice(0, 20));
-            log(`ALERTA recibida de ${alert?.from}`);
-            if (
-              !hasCenteredRef.current &&
-              alert?.location?.latitude &&
-              alert?.location?.longitude
-            ) {
-              setMapRegion({
-                latitude: alert.location.latitude,
-                longitude: alert.location.longitude,
-                latitudeDelta: 0.01,
-                longitudeDelta: 0.01,
-              });
-              hasCenteredRef.current = true;
-            }
-          }
-        } catch (e) {
-          log(`Payload inválido recibido: ${event?.payload}`);
-        }
-      }),
-      NearbyMesh.addListener('native_error', (event) => {
-        log(`Error nativo: ${event?.message}`);
-      }),
-    ];
-
-    startMesh();
-
-    return () => {
-      subs.forEach((s) => s?.remove?.());
-      locationSubRef.current?.remove?.();
-      locationSubRef.current = null;
-      NativeLocationModule.stopContinuousUpdates().catch(() => {});
-      NearbyMesh.stopMesh().catch(() => {});
-    };
-  }, []);
-
+// ─── Splash de carga ──────────────────────────────────────────────────────────
+function LoadingScreen() {
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Panic Mesh — Fase 1</Text>
-
-      <View style={styles.mapCard}>
-        <MapView
-          provider={PROVIDER_DEFAULT}
-          style={styles.map}
-          region={
-            mapRegion ?? {
-              latitude: 19.4326,
-              longitude: -99.1332,
-              latitudeDelta: 0.1,
-              longitudeDelta: 0.1,
-            }
-          }
-          onRegionChangeComplete={(region) => setMapRegion(region)}
-          showsUserLocation={false}
-        >
-          {lastLocation && (
-            <Marker
-              title="Tu ubicación"
-              coordinate={{
-                latitude: lastLocation.coords.latitude,
-                longitude: lastLocation.coords.longitude,
-              }}
-              pinColor="#22c55e"
-            />
-          )}
-
-          {alerts
-            .filter((a) => a?.location?.latitude && a?.location?.longitude)
-            .map((a) => (
-              <Marker
-                key={a.alertId}
-                title="Alerta de pánico"
-                description={`De: ${a.from}`}
-                coordinate={{
-                  latitude: a.location.latitude,
-                  longitude: a.location.longitude,
-                }}
-                pinColor="#ef4444"
-              />
-            ))}
-        </MapView>
+    <View style={st.loading}>
+      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+      <View style={st.logoWrap}>
+        <Text style={st.logoText}>SS</Text>
       </View>
-
-      <View style={styles.card}>
-        <Text style={styles.label}>Estado</Text>
-        <Text style={styles.value}>{ready ? 'Activo' : 'Inactivo'}</Text>
-
-        <Text style={styles.label}>Node ID</Text>
-        <Text style={styles.mono}>{nodeId}</Text>
-
-        <Text style={styles.label}>Dispositivos conectados</Text>
-        <Text style={styles.value}>{connectedCount}</Text>
-      </View>
-
-      <TouchableOpacity
-        style={[styles.panicButton, !ready && styles.disabled]}
-        onPress={sendPanic}
-        disabled={!ready}
-      >
-        <Text style={styles.panicText}>BOTÓN DE PÁNICO</Text>
-      </TouchableOpacity>
-
-      <View style={styles.row}>
-        <TouchableOpacity style={styles.secondaryBtn} onPress={startMesh}>
-          <Text style={styles.secondaryText}>Reiniciar red local</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.secondaryBtn} onPress={stopMesh}>
-          <Text style={styles.secondaryText}>Detener</Text>
-        </TouchableOpacity>
-      </View>
-
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Alertas recibidas</Text>
-        <ScrollView style={styles.list}>
-          {alerts.length === 0 ? (
-            <Text style={styles.empty}>Sin alertas todavía.</Text>
-          ) : (
-            alerts.map((a) => (
-              <View key={a.alertId} style={styles.alertCard}>
-                <Text style={styles.alertTitle}>Alerta de pánico</Text>
-                <Text style={styles.alertLine}>De: {a.from}</Text>
-                <Text style={styles.alertLine}>ID: {a.alertId}</Text>
-                <Text style={styles.alertLine}>
-                  Hora: {new Date(a.timestamp).toLocaleTimeString()}
-                </Text>
-              </View>
-            ))
-          )}
-        </ScrollView>
-      </View>
-
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Logs</Text>
-        <ScrollView style={styles.list}>
-          {logs.map((line, idx) => (
-            <Text key={idx} style={styles.logLine}>
-              {line}
-            </Text>
-          ))}
-        </ScrollView>
-      </View>
+      <Text style={st.logoTitle}>Sendero Seguro</Text>
+      <ActivityIndicator
+        size="large"
+        color="#C8102E"
+        style={{ marginTop: 32 }}
+      />
+      <Text style={st.loadingText}>Verificando sesión...</Text>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0f1115',
-    paddingHorizontal: 18,
-    paddingTop: 56,
-    paddingBottom: 18,
+// ─── Navegación raíz ──────────────────────────────────────────────────────────
+function AppNavigator() {
+  const { user, guestMode, loading } = useAuth();
+
+  // Mientras AuthContext verifica token en AsyncStorage → mostrar splash
+  if (loading) return <LoadingScreen />;
+
+  // Sin sesión ni modo invitado → Login
+  if (!user && !guestMode) return <LoginScreen />;
+
+  // Con sesión o en modo invitado → Dashboard
+  return <DashboardScreen />;
+}
+
+// ─── Root ─────────────────────────────────────────────────────────────────────
+export default function App() {
+  return (
+    <SafeAreaProvider>
+      <AuthProvider>
+        <AppNavigator />
+      </AuthProvider>
+    </SafeAreaProvider>
+  );
+}
+
+// ─── Estilos del splash ───────────────────────────────────────────────────────
+const st = StyleSheet.create({
+  loading: {
+    flex:            1,
+    backgroundColor: '#FFFFFF',
+    alignItems:      'center',
+    justifyContent:  'center',
   },
-  title: {
-    color: '#fff',
-    fontSize: 24,
-    fontWeight: '700',
-    marginBottom: 16,
+  logoWrap: {
+    width:           72,
+    height:          72,
+    borderRadius:    18,
+    backgroundColor: '#C8102E',
+    alignItems:      'center',
+    justifyContent:  'center',
+    marginBottom:    16,
+    shadowColor:     '#C8102E',
+    shadowOffset:    { width: 0, height: 4 },
+    shadowOpacity:   0.3,
+    shadowRadius:    8,
+    elevation:       8,
   },
-  card: {
-    backgroundColor: '#171a21',
-    borderRadius: 14,
-    padding: 16,
-    marginBottom: 16,
+  logoText: {
+    color:         '#FFF',
+    fontSize:      28,
+    fontWeight:    '700',
+    letterSpacing: 1,
   },
-  mapCard: {
-    backgroundColor: '#0b1220',
-    borderRadius: 16,
-    padding: 8,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: '#1f2937',
-  },
-  map: {
-    height: 220,
-    borderRadius: 12,
-  },
-  label: {
-    color: '#98a2b3',
-    fontSize: 12,
-    marginTop: 8,
-  },
-  value: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: '600',
-  },
-  mono: {
-    color: '#d0d5dd',
-    fontFamily: 'monospace',
-    fontSize: 13,
-  },
-  panicButton: {
-    backgroundColor: '#b42318',
-    borderRadius: 18,
-    paddingVertical: 22,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 14,
-  },
-  panicText: {
-    color: '#fff',
-    fontSize: 20,
-    fontWeight: '800',
+  logoTitle: {
+    fontSize:      22,
+    fontWeight:    '700',
+    color:         '#1A1A1A',
     letterSpacing: 0.5,
   },
-  disabled: {
-    opacity: 0.45,
-  },
-  row: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 16,
-  },
-  secondaryBtn: {
-    flex: 1,
-    backgroundColor: '#1f2937',
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: 'center',
-  },
-  secondaryText: {
-    color: '#fff',
-    fontWeight: '600',
-  },
-  section: {
-    flex: 1,
-    marginTop: 6,
-  },
-  sectionTitle: {
-    color: '#cbd5e1',
-    fontSize: 14,
-    fontWeight: '700',
-    marginBottom: 8,
-  },
-  list: {
-    backgroundColor: '#111827',
-    borderRadius: 12,
-    padding: 10,
-  },
-  empty: {
-    color: '#94a3b8',
-    fontStyle: 'italic',
-  },
-  alertCard: {
-    backgroundColor: '#1f2937',
-    borderLeftWidth: 4,
-    borderLeftColor: '#ef4444',
-    borderRadius: 10,
-    padding: 12,
-    marginBottom: 10,
-  },
-  alertTitle: {
-    color: '#fca5a5',
-    fontWeight: '800',
-    marginBottom: 6,
-  },
-  alertLine: {
-    color: '#e5e7eb',
-    fontSize: 12,
-  },
-  logLine: {
-    color: '#9ca3af',
-    fontSize: 11,
-    marginBottom: 4,
-    fontFamily: 'monospace',
+  loadingText: {
+    marginTop: 12,
+    fontSize:  13,
+    color:     '#888',
   },
 });

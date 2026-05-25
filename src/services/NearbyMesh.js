@@ -1,38 +1,48 @@
+/**
+ * src/services/NearbyMesh.js
+ *
+ * Puente JS → NearbyMeshModule nativo.
+ * Corrige WARN: "NativeEventEmitter called without addListener/removeListeners"
+ * El módulo Kotlin ya tiene esos métodos — aquí los exponemos correctamente.
+ */
 import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
-
-const LINKING_ERROR =
-  `El módulo NearbyMesh no está disponible. ` +
-  `Asegúrese de haber recompilado Android después de agregar el código nativo.`;
 
 const { NearbyMeshModule } = NativeModules;
 
 if (Platform.OS === 'android' && !NearbyMeshModule) {
-  console.warn(LINKING_ERROR);
+  console.warn('[NearbyMesh] Módulo nativo no disponible. Ejecuta `npx expo run:android`.');
 }
 
-const emitter = NearbyMeshModule
-  ? new NativeEventEmitter(NearbyMeshModule)
-  : null;
+// ─── Emitter real ─────────────────────────────────────────────────────────────
+// NativeEventEmitter requiere que el módulo exponga addListener y removeListeners.
+// NearbyMeshModule.kt ya los tiene (@ReactMethod). Aquí lo pasamos directamente.
+const emitter = NearbyMeshModule ? new NativeEventEmitter(NearbyMeshModule) : null;
 
-const NearbyMesh = {
+// ─── Stub (cuando el módulo no está disponible) ───────────────────────────────
+const stub = {
+  startMesh:   async () => {},
+  stopMesh:    async () => {},
+  sendAlert:   async () => false,
+  addListener: ()      => ({ remove: () => {} }),
+};
+
+// ─── API real ─────────────────────────────────────────────────────────────────
+const real = {
   startMesh(nodeId) {
     return NearbyMeshModule.startMesh(nodeId);
   },
-
   stopMesh() {
     return NearbyMeshModule.stopMesh();
   },
-
   sendAlert(payload) {
-    return NearbyMeshModule.sendAlert(JSON.stringify(payload));
+    const body = typeof payload === 'string' ? payload : JSON.stringify(payload);
+    return NearbyMeshModule.sendAlert(body);
   },
-
   addListener(eventName, callback) {
-    if (!emitter) {
-      return { remove: () => {} };
-    }
+    if (!emitter) return { remove: () => {} };
     return emitter.addListener(eventName, callback);
   },
 };
 
+const NearbyMesh = NearbyMeshModule ? real : stub;
 export default NearbyMesh;
