@@ -10,10 +10,11 @@
  */
 import React, { useState, useRef, useCallback } from 'react';
 import {
-  Animated, KeyboardAvoidingView, Platform, SafeAreaView,
+  Animated, KeyboardAvoidingView, Platform,
   ScrollView, StyleSheet, Text, TextInput,
   TouchableOpacity, View, ActivityIndicator,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
 import { COLORS, SPACING, RADIUS, TYPOGRAPHY, SHADOW } from '../constants/theme';

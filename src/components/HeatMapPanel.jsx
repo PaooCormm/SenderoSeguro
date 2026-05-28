@@ -6,127 +6,21 @@
  *
  * Dependencia: react-native-maps (ya usada en MapPanel)
  */
-import React, { useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import {
   View,
   Text,
   TouchableOpacity,
   StyleSheet,
-  ScrollView,
 } from 'react-native';
 import MapView, { Circle, Marker, PROVIDER_DEFAULT } from 'react-native-maps';
 import { COLORS, SPACING, RADIUS, TYPOGRAPHY, SHADOW, ESCOM_REGION } from '../constants/theme';
 import api from '../services/api';
 
-// ─── Zonas de calor — coordenadas reales ESCOM / Zacatenco ───────────────────
-// Nivel: 1 = bajo (verde), 2 = medio (amarillo), 3 = alto (rojo)
-const ZONAS_CALOR = [
-  {
-    id: 'z1',
-    nombre: 'Acceso Norte',
-    descripcion: 'Entrada principal Av. Juan de Dios Bátiz',
-    lat:    19.50495,
-    lng:   -99.14690,
-    radio:  90,
-    nivel:  3,
-    incidentes: 8,
-  },
-  {
-    id: 'z2',
-    nombre: 'Edificio A — ESCOM',
-    descripcion: 'Aulas principales, pasillo central',
-    lat:    19.50440,
-    lng:   -99.14740,
-    radio:  70,
-    nivel:  2,
-    incidentes: 4,
-  },
-  {
-    id: 'z3',
-    nombre: 'Laboratorios de Redes',
-    descripcion: '2do piso, área de práctica',
-    lat:    19.50380,
-    lng:   -99.14800,
-    radio:  50,
-    nivel:  2,
-    incidentes: 3,
-  },
-  {
-    id: 'z4',
-    nombre: 'Estacionamiento Sur',
-    descripcion: 'Zona vehicular Unidad Zacatenco',
-    lat:    19.50290,
-    lng:   -99.14720,
-    radio:  120,
-    nivel:  1,
-    incidentes: 1,
-  },
-  {
-    id: 'z5',
-    nombre: 'Cafetería Central',
-    descripcion: 'Área de descanso y comedor',
-    lat:    19.50420,
-    lng:   -99.14650,
-    radio:  55,
-    nivel:  1,
-    incidentes: 2,
-  },
-  {
-    id: 'z6',
-    nombre: 'Módulo C — Titulación',
-    descripcion: 'Cámara sin señal reportada',
-    lat:    19.50360,
-    lng:   -99.14590,
-    radio:  60,
-    nivel:  3,
-    incidentes: 5,
-  },
-  {
-    id: 'z7',
-    nombre: 'Acceso Wilfrido Massieu',
-    descripcion: 'Bache reportado — zona peatonal',
-    lat:    19.50550,
-    lng:   -99.14760,
-    radio:  65,
-    nivel:  2,
-    incidentes: 3,
-  },
-  {
-    id: 'z8',
-    nombre: 'Canchas Deportivas',
-    descripcion: 'Área abierta, iluminación deficiente',
-    lat:    19.50470,
-    lng:   -99.14870,
-    radio:  100,
-    nivel:  1,
-    incidentes: 2,
-  },
-];
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-const NIVEL_CONFIG = {
-  1: {
-    label:       'Bajo',
-    color:       COLORS.statusOk,
-    bg:          COLORS.statusOkBg,
-    fillOpacity: 0.18,
-    strokeOpacity: 0.45,
-  },
-  2: {
-    label:       'Medio',
-    color:       COLORS.statusWarn,
-    bg:          COLORS.statusWarnBg,
-    fillOpacity: 0.22,
-    strokeOpacity: 0.55,
-  },
-  3: {
-    label:       'Alto',
-    color:       COLORS.statusDanger,
-    bg:          COLORS.statusDangerBg,
-    fillOpacity: 0.28,
-    strokeOpacity: 0.65,
-  },
-};
+const ALERT_CLUSTER_RADIUS_METERS = 200;
+const ALERT_CLUSTER_BASE_RADIUS = 40;
+const ALERT_CLUSTER_FACTOR = 20;
 
 function hexToRgba(hex, alpha) {
   const h = hex.replace('#', '');
@@ -136,40 +30,108 @@ function hexToRgba(hex, alpha) {
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
+function toRad(value) {
+  return (value * Math.PI) / 180;
+}
+
+function distanceMeters(a, b) {
+  const R = 6371000;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const sinDLat = Math.sin(dLat / 2);
+  const sinDLng = Math.sin(dLng / 2);
+  const h = sinDLat * sinDLat + Math.cos(lat1) * Math.cos(lat2) * sinDLng * sinDLng;
+  const c = 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+  return R * c;
+}
+
 // ─── Componente ───────────────────────────────────────────────────────────────
 export function HeatMapPanel({ style }) {
-  const [zonas, setZonas] = useState([]); 
-  const [loading, setLoading] = useState(true);
-  const [zonaSeleccionada, setZonaSeleccionada] = useState(null);
-  const [filtroNivel, setFiltroNivel]           = useState(0); // 0 = todos
+  const [filtroTipo, setFiltroTipo] = useState('todos');
+  const [alertas, setAlertas] = useState([]);
+  const [alertaSeleccionada, setAlertaSeleccionada] = useState(null);
+  const [reportes, setReportes] = useState([]);
+  const [reporteSeleccionado, setReporteSeleccionado] = useState(null);
 
-  // Cargar zonas desde la API
+  // Cargar alertas activas desde la API
   useEffect(() => {
-    api.getZonas() // Esta función ya la tienes en tu api.js
+    api.getAlertas({ estado: 'activa' })
       .then(res => {
-        // Mapeamos los datos del servidor a lo que el mapa espera
-        const mapeadas = res.zones.map(z => ({
-          id: z.id,
-          nombre: z.name,
-          descripcion: z.description,
-          // Extraemos lat/lng de tu geom (que viene como WKT: "POINT(lng lat)")
-          lat: parseFloat(z.geom_text.split(' ')[2].replace(')', '')),
-          lng: parseFloat(z.geom_text.split(' ')[1].replace('(', '')),
-          radio: 80, // Valor fijo o devuelto por tu DB
-          nivel: z.risk_level === 'high' ? 3 : (z.risk_level === 'medium' ? 2 : 1),
-          incidentes: 0 // Si tu DB no tiene conteo, puedes dejarlo en 0
+        const mapeadas = (res.alerts || []).map(a => ({
+          id: a.id,
+          titulo: a.titulo,
+          estado: a.estado,
+          lat: parseFloat(a.latitud),
+          lng: parseFloat(a.longitud),
+          createdAt: a.createdAt,
         }));
-        setZonas(mapeadas);
+        setAlertas(mapeadas);
       })
-      .catch(err => console.error("Error cargando zonas:", err))
-      .finally(() => setLoading(false));
+      .catch(err => console.error('Error cargando alertas:', err));
   }, []);
 
-  const zonasFiltradas = filtroNivel === 0
-    ? zonas
-    : zonas.filter((z) => z.nivel === filtroNivel);
+  // Cargar reportes pendientes desde la API
+  useEffect(() => {
+    api.getReportes({ estado: 'pendiente', limit: 50 })
+      .then(res => {
+        const mapeadas = (res.reports || []).map(r => ({
+          id: r.id,
+          titulo: r.titulo,
+          categoria: r.categoria,
+          estado: r.estado,
+          ubicacionTexto: r.ubicacionTexto,
+          lat: parseFloat(r.latitud),
+          lng: parseFloat(r.longitud),
+          createdAt: r.createdAt,
+        }));
+        setReportes(mapeadas);
+      })
+      .catch(err => console.error('Error cargando reportes:', err));
+  }, []);
 
-  const totalIncidentes = zonasFiltradas.reduce((s, z) => s + z.incidentes, 0);
+  const mostrarAlertas = filtroTipo === 'todos' || filtroTipo === 'alertas';
+  const mostrarReportes = filtroTipo === 'todos' || filtroTipo === 'reportes';
+
+  const alertClusters = useMemo(() => {
+    if (!alertas.length) return [];
+    const clusters = [];
+
+    alertas.forEach((alerta) => {
+      const punto = { lat: alerta.lat, lng: alerta.lng };
+      let asignado = null;
+
+      for (const cluster of clusters) {
+        const dist = distanceMeters(punto, { lat: cluster.lat, lng: cluster.lng });
+        if (dist <= ALERT_CLUSTER_RADIUS_METERS) {
+          asignado = cluster;
+          break;
+        }
+      }
+
+      if (!asignado) {
+        clusters.push({
+          id: `cluster-${alerta.id}`,
+          lat: punto.lat,
+          lng: punto.lng,
+          alertas: [alerta],
+        });
+      } else {
+        asignado.alertas.push(alerta);
+        const total = asignado.alertas.length;
+        asignado.lat = (asignado.lat * (total - 1) + punto.lat) / total;
+        asignado.lng = (asignado.lng * (total - 1) + punto.lng) / total;
+      }
+    });
+
+    return clusters.map((cluster) => ({
+      ...cluster,
+      radio: ALERT_CLUSTER_BASE_RADIUS + ALERT_CLUSTER_FACTOR * cluster.alertas.length,
+    }));
+  }, [alertas]);
+
+  const totalAlertas = alertas.length;
 
   return (
     <View style={[styles.container, style]}>
@@ -191,68 +153,93 @@ export function HeatMapPanel({ style }) {
           strokeWidth={1.5}
         />
 
-        {/* Zonas de calor */}
-        {zonasFiltradas.map((zona) => {
-          const cfg = NIVEL_CONFIG[zona.nivel];
-          return (
-            <React.Fragment key={zona.id}>
-              <Circle
-                center={{ latitude: zona.lat, longitude: zona.lng }}
-                radius={zona.radio}
-                strokeColor={hexToRgba(cfg.color, cfg.strokeOpacity)}
-                fillColor={hexToRgba(cfg.color, zona.id === zonaSeleccionada?.id ? cfg.fillOpacity * 1.8 : cfg.fillOpacity)}
-                strokeWidth={zona.id === zonaSeleccionada?.id ? 2 : 1.2}
-              />
-              <Marker
-                coordinate={{ latitude: zona.lat, longitude: zona.lng }}
-                anchor={{ x: 0.5, y: 0.5 }}
-                onPress={() => setZonaSeleccionada(
-                  zonaSeleccionada?.id === zona.id ? null : zona
-                )}
-              >
-                <View style={[styles.markerBadge, { backgroundColor: cfg.bg, borderColor: cfg.color }]}>
-                  <Text style={[styles.markerCount, { color: cfg.color }]}>
-                    {zona.incidentes}
-                  </Text>
-                </View>
-              </Marker>
-            </React.Fragment>
-          );
-        })}
+        {/* Zonas de alertas SOS (clusters) */}
+        {mostrarAlertas && alertClusters.map((cluster) => (
+          <React.Fragment key={cluster.id}>
+            <Circle
+              center={{ latitude: cluster.lat, longitude: cluster.lng }}
+              radius={cluster.radio}
+              strokeColor={hexToRgba(COLORS.statusDanger, 0.55)}
+              fillColor={hexToRgba(COLORS.statusDanger, 0.22)}
+              strokeWidth={1.4}
+            />
+            <Marker
+              coordinate={{ latitude: cluster.lat, longitude: cluster.lng }}
+              anchor={{ x: 0.5, y: 0.5 }}
+              onPress={() => setAlertaSeleccionada({
+                id: cluster.id,
+                titulo: `${cluster.alertas.length} alerta${cluster.alertas.length === 1 ? '' : 's'} SOS`,
+                estado: 'activa',
+              })}
+            >
+              <View style={styles.alertClusterBadge}>
+                <Text style={styles.alertClusterText}>{cluster.alertas.length}</Text>
+              </View>
+            </Marker>
+          </React.Fragment>
+        ))}
+
+        {/* Alertas activas */}
+        {mostrarAlertas && alertas.map((alerta) => (
+          <Marker
+            key={`alert-${alerta.id}`}
+            coordinate={{ latitude: alerta.lat, longitude: alerta.lng }}
+            onPress={() => setAlertaSeleccionada(
+              alertaSeleccionada?.id === alerta.id ? null : alerta
+            )}
+          >
+            <View style={styles.alertaBadge}>
+              <Text style={styles.alertaBadgeText}>SOS</Text>
+            </View>
+          </Marker>
+        ))}
+
+        {/* Reportes pendientes */}
+        {mostrarReportes && reportes.map((reporte) => (
+          <Marker
+            key={`report-${reporte.id}`}
+            coordinate={{ latitude: reporte.lat, longitude: reporte.lng }}
+            onPress={() => setReporteSeleccionado(
+              reporteSeleccionado?.id === reporte.id ? null : reporte
+            )}
+          >
+            <View style={styles.reporteBadge}>
+              <Text style={styles.reporteBadgeText}>REP</Text>
+            </View>
+          </Marker>
+        ))}
       </MapView>
 
       {/* Barra superior */}
       <View style={styles.topBar}>
         <View>
           <Text style={styles.topBarTitle}>🔥 Mapa de Calor</Text>
-          <Text style={styles.topBarSub}>ESCOM · {totalIncidentes} incidentes registrados</Text>
+          <Text style={styles.topBarSub}>ESCOM · {totalAlertas} alertas SOS activas</Text>
         </View>
       </View>
 
-      {/* Filtros de nivel */}
+      {/* Filtros de tipo */}
       <View style={styles.nivelFiltros}>
         {[
-          { valor: 0, label: 'Todos' },
-          { valor: 1, label: 'Bajo'  },
-          { valor: 2, label: 'Medio' },
-          { valor: 3, label: 'Alto'  },
+          { valor: 'todos', label: 'Todos', color: COLORS.primary },
+          { valor: 'reportes', label: 'Reportes', color: COLORS.statusWarn },
+          { valor: 'alertas', label: 'Alertas', color: COLORS.statusDanger },
         ].map((f) => {
-          const activo = filtroNivel === f.valor;
-          const cfg    = f.valor > 0 ? NIVEL_CONFIG[f.valor] : null;
+          const activo = filtroTipo === f.valor;
           return (
             <TouchableOpacity
               key={f.valor}
               style={[
                 styles.nivelChip,
-                activo && { backgroundColor: cfg?.bg ?? COLORS.primaryBg, borderColor: cfg?.color ?? COLORS.primary },
+                activo && { backgroundColor: `${f.color}1A`, borderColor: f.color },
               ]}
-              onPress={() => setFiltroNivel(f.valor)}
+              onPress={() => setFiltroTipo(f.valor)}
               activeOpacity={0.7}
             >
-              {cfg && <View style={[styles.nivelDot, { backgroundColor: cfg.color }]} />}
+              <View style={[styles.nivelDot, { backgroundColor: f.color }]} />
               <Text style={[
                 styles.nivelChipText,
-                activo && { color: cfg?.color ?? COLORS.primary, fontWeight: TYPOGRAPHY.fontSemibold },
+                activo && { color: f.color, fontWeight: TYPOGRAPHY.fontSemibold },
               ]}>
                 {f.label}
               </Text>
@@ -261,53 +248,46 @@ export function HeatMapPanel({ style }) {
         })}
       </View>
 
-      {/* Panel de zona seleccionada */}
-      {zonaSeleccionada && (
-        <View style={styles.zonaPanel}>
-          <View style={styles.zonaPanelHeader}>
-            <View style={[
-              styles.zonaNivel,
-              { backgroundColor: NIVEL_CONFIG[zonaSeleccionada.nivel].bg },
-            ]}>
-              <View style={[
-                styles.zonaNivelDot,
-                { backgroundColor: NIVEL_CONFIG[zonaSeleccionada.nivel].color },
-              ]} />
-              <Text style={[
-                styles.zonaNivelText,
-                { color: NIVEL_CONFIG[zonaSeleccionada.nivel].color },
-              ]}>
-                Riesgo {NIVEL_CONFIG[zonaSeleccionada.nivel].label}
-              </Text>
-            </View>
-            <TouchableOpacity onPress={() => setZonaSeleccionada(null)}>
+      {/* Panel de alerta seleccionada */}
+      {alertaSeleccionada && (
+        <View style={styles.alertaPanel}>
+          <View style={styles.alertaPanelHeader}>
+            <Text style={styles.alertaTitulo}>{alertaSeleccionada.titulo || 'Alerta SOS'}</Text>
+            <TouchableOpacity onPress={() => setAlertaSeleccionada(null)}>
               <Text style={styles.panelCerrar}>✕</Text>
             </TouchableOpacity>
           </View>
-          <Text style={styles.zonaNombre}>{zonaSeleccionada.nombre}</Text>
-          <Text style={styles.zonaDesc}>{zonaSeleccionada.descripcion}</Text>
-          <View style={styles.zonaStats}>
-            <View style={styles.zonaStatItem}>
-              <Text style={styles.zonaStatNum}>{zonaSeleccionada.incidentes}</Text>
-              <Text style={styles.zonaStatLabel}>Incidentes</Text>
-            </View>
-            <View style={styles.zonaStatDivider} />
-            <View style={styles.zonaStatItem}>
-              <Text style={styles.zonaStatNum}>{zonaSeleccionada.radio}m</Text>
-              <Text style={styles.zonaStatLabel}>Radio vigilado</Text>
-            </View>
+          <Text style={styles.alertaEstado}>Estado: {alertaSeleccionada.estado}</Text>
+        </View>
+      )}
+
+      {/* Panel de reporte seleccionado */}
+      {reporteSeleccionado && (
+        <View style={styles.reportePanel}>
+          <View style={styles.reportePanelHeader}>
+            <Text style={styles.reporteTitulo}>{reporteSeleccionado.titulo || 'Reporte'}</Text>
+            <TouchableOpacity onPress={() => setReporteSeleccionado(null)}>
+              <Text style={styles.panelCerrar}>✕</Text>
+            </TouchableOpacity>
           </View>
+          <Text style={styles.reporteMeta}>Categoria: {reporteSeleccionado.categoria}</Text>
+          <Text style={styles.reporteMeta}>Estado: {reporteSeleccionado.estado}</Text>
+          {!!reporteSeleccionado.ubicacionTexto && (
+            <Text style={styles.reporteMeta}>Ubicacion: {reporteSeleccionado.ubicacionTexto}</Text>
+          )}
         </View>
       )}
 
       {/* Leyenda */}
       <View style={styles.leyenda}>
-        {Object.entries(NIVEL_CONFIG).map(([nivel, cfg]) => (
-          <View key={nivel} style={styles.leyendaItem}>
-            <View style={[styles.leyendaDot, { backgroundColor: cfg.color }]} />
-            <Text style={styles.leyendaText}>{cfg.label}</Text>
-          </View>
-        ))}
+        <View style={styles.leyendaItem}>
+          <View style={[styles.leyendaDot, { backgroundColor: COLORS.statusDanger }]} />
+          <Text style={styles.leyendaText}>Alertas SOS</Text>
+        </View>
+        <View style={styles.leyendaItem}>
+          <View style={[styles.leyendaDot, { backgroundColor: COLORS.statusWarn }]} />
+          <Text style={styles.leyendaText}>Reportes</Text>
+        </View>
       </View>
     </View>
   );
@@ -384,22 +364,63 @@ const styles = StyleSheet.create({
     fontWeight: TYPOGRAPHY.fontMedium,
   },
 
-  // Marcador con conteo
-  markerBadge: {
-    width:        24,
-    height:       24,
-    borderRadius: 12,
+  // Marcador de cluster de alertas
+  alertClusterBadge: {
+    width:        26,
+    height:       26,
+    borderRadius: 13,
     borderWidth:  1.5,
+    borderColor:  COLORS.statusDanger,
+    backgroundColor: COLORS.statusDangerBg,
     alignItems:   'center',
     justifyContent: 'center',
   },
-  markerCount: {
+  alertClusterText: {
     fontSize:   10,
     fontWeight: TYPOGRAPHY.fontBold,
+    color:      COLORS.statusDanger,
   },
 
-  // Panel zona seleccionada
-  zonaPanel: {
+  // Marcador de alerta
+  alertaBadge: {
+    backgroundColor: COLORS.statusDanger,
+    borderRadius:    14,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderWidth: 1,
+    borderColor: COLORS.statusDanger,
+  },
+  alertaBadgeText: {
+    color:      '#fff',
+    fontSize:   10,
+    fontWeight: TYPOGRAPHY.fontBold,
+    letterSpacing: 0.3,
+  },
+
+  // Marcador de reporte
+  reporteBadge: {
+    backgroundColor: COLORS.statusWarn,
+    borderRadius:    14,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderWidth: 1,
+    borderColor: COLORS.statusWarn,
+  },
+  reporteBadgeText: {
+    color:      '#fff',
+    fontSize:   10,
+    fontWeight: TYPOGRAPHY.fontBold,
+    letterSpacing: 0.3,
+  },
+
+  panelCerrar: {
+    color:    COLORS.textMuted,
+    fontSize: 14,
+    padding:  2,
+  },
+
+  // Panel de alerta
+  alertaPanel: {
     position:          'absolute',
     bottom:            40,
     left:              SPACING.sm,
@@ -408,70 +429,52 @@ const styles = StyleSheet.create({
     borderRadius:      RADIUS.lg,
     padding:           SPACING.md,
     borderWidth:       1,
-    borderColor:       COLORS.border,
+    borderColor:       COLORS.statusDanger,
     ...SHADOW.card,
   },
-  zonaPanelHeader: {
+  alertaPanelHeader: {
     flexDirection:  'row',
     alignItems:     'center',
     justifyContent: 'space-between',
     marginBottom:   SPACING.xs,
   },
-  zonaNivel: {
-    flexDirection:     'row',
-    alignItems:        'center',
-    gap:               4,
-    borderRadius:      RADIUS.sm,
-    paddingHorizontal: SPACING.sm,
-    paddingVertical:   2,
-  },
-  zonaNivelDot: {
-    width:        6,
-    height:       6,
-    borderRadius: 3,
-  },
-  zonaNivelText: {
-    fontSize:   TYPOGRAPHY.xs,
-    fontWeight: TYPOGRAPHY.fontBold,
-  },
-  panelCerrar: {
-    color:    COLORS.textMuted,
-    fontSize: 14,
-    padding:  2,
-  },
-  zonaNombre: {
+  alertaTitulo: {
     fontSize:   TYPOGRAPHY.sm,
     fontWeight: TYPOGRAPHY.fontSemibold,
-    color:      COLORS.textPrimary,
-    marginBottom: 2,
+    color:      COLORS.statusDanger,
   },
-  zonaDesc: {
+  alertaEstado: {
     fontSize: TYPOGRAPHY.xs,
-    color:    COLORS.textMuted,
-    marginBottom: SPACING.sm,
+    color:    COLORS.textSecondary,
   },
-  zonaStats: {
+
+  // Panel de reporte
+  reportePanel: {
+    position:          'absolute',
+    bottom:            40,
+    left:              SPACING.sm,
+    right:             SPACING.sm,
+    backgroundColor:   'rgba(255,255,255,0.97)',
+    borderRadius:      RADIUS.lg,
+    padding:           SPACING.md,
+    borderWidth:       1,
+    borderColor:       COLORS.statusWarn,
+    ...SHADOW.card,
+  },
+  reportePanelHeader: {
     flexDirection:  'row',
     alignItems:     'center',
-    justifyContent: 'center',
-    gap:            SPACING.lg,
+    justifyContent: 'space-between',
+    marginBottom:   SPACING.xs,
   },
-  zonaStatItem: {
-    alignItems: 'center',
+  reporteTitulo: {
+    fontSize:   TYPOGRAPHY.sm,
+    fontWeight: TYPOGRAPHY.fontSemibold,
+    color:      COLORS.statusWarn,
   },
-  zonaStatNum: {
-    fontSize:   TYPOGRAPHY.lg,
-    fontWeight: TYPOGRAPHY.fontBold,
-    color:      COLORS.textPrimary,
-  },
-  zonaStatLabel: {
+  reporteMeta: {
     fontSize: TYPOGRAPHY.xs,
-    color:    COLORS.textMuted,
-  },
-  zonaStatDivider: {
-    width:  1,
-    height: 30,
-    backgroundColor: COLORS.border,
+    color:    COLORS.textSecondary,
   },
 
   // Leyenda

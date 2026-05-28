@@ -76,7 +76,7 @@ class NearbyMeshModule(private val reactContext: ReactApplicationContext) :
       if (endpointId != fromEndpointId) {
         connectionsClient.sendPayload(endpointId, Payload.fromBytes(forwardedBytes))
           .addOnFailureListener {
-            errorEvent("Falló reenvío a $endpointId: ${it.message}")
+            errorEvent("Fallo reenvío a $endpointId: ${it.message}")
           }
       }
     }
@@ -103,7 +103,6 @@ class NearbyMeshModule(private val reactContext: ReactApplicationContext) :
 
   private val connectionLifecycleCallback = object : ConnectionLifecycleCallback() {
     override fun onConnectionInitiated(endpointId: String, info: ConnectionInfo) {
-      // En esta fase 1 aceptamos automáticamente toda conexión válida.
       connectionsClient.acceptConnection(endpointId, payloadCallback)
         .addOnFailureListener {
           errorEvent("No se pudo aceptar conexión con $endpointId: ${it.message}")
@@ -158,7 +157,6 @@ class NearbyMeshModule(private val reactContext: ReactApplicationContext) :
     }
 
     override fun onEndpointLost(endpointId: String) {
-      // Opcional para esta fase.
     }
   }
 

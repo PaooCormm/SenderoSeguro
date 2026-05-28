@@ -200,6 +200,14 @@ const api = {
     return apiCall('/auth/me', { method: 'GET' });
   },
 
+  /** Cambiar contraseña */
+  cambiarPassword(currentPassword, newPassword) {
+    return apiCall('/auth/password', {
+      method: 'PUT',
+      body:   { currentPassword, newPassword },
+    });
+  },
+
   // ── Reportes ────────────────────────────────────────────────────────────────
 
   /**
@@ -227,7 +235,7 @@ const api = {
 
   /** Marcar reporte como útil */
   votarReporte(id) {
-    return apiCall(`/reports/${id}/utiles`, { method: 'POST' });
+    return apiCall(`/reports/${id}/util`, { method: 'POST' });
   },
 
   // ── Alertas de emergencia ───────────────────────────────────────────────────
@@ -237,7 +245,7 @@ const api = {
    * body: { titulo, latitude, longitude }
    */
   emitirAlerta(titulo, latitude, longitude) {
-    return apiCall('/emergency-alerts', {
+    return apiCall('/alerts', {
       method: 'POST',
       body:   { titulo, latitude, longitude },
     });
@@ -246,7 +254,7 @@ const api = {
   /** Alertas activas (para el mapa) */
   getAlertas(params = {}) {
     const qs = new URLSearchParams(params).toString();
-    return apiCall(`/emergency-alerts${qs ? `?${qs}` : ''}`, { method: 'GET' });
+    return apiCall(`/alerts${qs ? `?${qs}` : ''}`, { method: 'GET' });
   },
 
   // ── Contactos de apoyo ───────────────────────────────────────────────────────

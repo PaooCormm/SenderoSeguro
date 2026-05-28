@@ -4,13 +4,13 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { COLORS, SPACING, RADIUS, TYPOGRAPHY, SHADOW } from '../constants/theme';
 import { SectionHeader, Divider, LogLine, StatusBadge } from '../components/UIElements';
 import api from '../services/api';
-import { useMesh } from '../hooks/useMesh';
+import { useMeshContext } from '../context/MeshContext';
 import {AddContactModal} from '../components/AddContactModal';
 
 import { useOrientation }    from '../hooks/useOrientation';
 
 export function NetworkScreen({ guestMode }) {
-  const mesh = useMesh();
+  const mesh = useMeshContext();
   const [contacts, setContacts] = useState([]);
   const [loading, setLoading] = useState(true);
   

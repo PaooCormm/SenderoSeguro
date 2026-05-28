@@ -27,6 +27,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useWindowDimensions } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
 import { COLORS, SPACING, RADIUS, TYPOGRAPHY, SHADOW } from '../constants/theme';
@@ -205,35 +206,111 @@ const actSt = StyleSheet.create({
   },
 });
 
-// ─── Modal de edición de nombre ───────────────────────────────────────────────
-function EditNameModal({ currentName, onSave, onCancel }) {
-  const [value, setValue] = useState(currentName);
-  const isValid = value.trim().length >= 3;
+// ─── Modal de cambio de contraseña ───────────────────────────────────────────
+function ChangePasswordModal({ onClose }) {
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const reqCurrentOk = currentPassword.trim().length > 0;
+  const reqLengthOk = newPassword.trim().length >= 8;
+  const reqMatchOk = newPassword.length > 0 && newPassword === confirmPassword;
+  const isValid = reqCurrentOk && reqLengthOk && reqMatchOk;
+
+  const handleClose = () => {
+    setCurrentPassword('');
+    setNewPassword('');
+    setConfirmPassword('');
+    setError('');
+    onClose?.();
+  };
+
+  const handleSave = async () => {
+    if (!isValid) {
+      if (newPassword.trim().length < 8) {
+        setError('La nueva contraseña debe tener al menos 8 caracteres.');
+      } else if (newPassword !== confirmPassword) {
+        setError('La confirmación no coincide.');
+      } else {
+        setError('Completa todos los campos.');
+      }
+      return;
+    }
+
+    setSaving(true);
+    setError('');
+    try {
+      await api.cambiarPassword(currentPassword, newPassword);
+      Alert.alert('Listo', 'Contraseña actualizada.');
+      handleClose();
+    } catch (err) {
+      setError(err.message || 'No se pudo actualizar la contraseña.');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <View style={editSt.overlay}>
       <View style={editSt.card}>
-        <Text style={editSt.title}>Editar nombre</Text>
+        <Text style={editSt.title}>Cambiar contraseña</Text>
         <TextInput
           style={editSt.input}
-          value={value}
-          onChangeText={setValue}
-          autoFocus
-          placeholder="Tu nombre completo"
+          value={currentPassword}
+          onChangeText={setCurrentPassword}
+          placeholder="Contraseña actual"
           placeholderTextColor={COLORS.textMuted}
-          autoCapitalize="words"
+          secureTextEntry
+          autoCapitalize="none"
         />
-        {!isValid && (
-          <Text style={editSt.hint}>Mínimo 3 caracteres</Text>
+        <TextInput
+          style={editSt.input}
+          value={newPassword}
+          onChangeText={setNewPassword}
+          placeholder="Nueva contraseña"
+          placeholderTextColor={COLORS.textMuted}
+          secureTextEntry
+          autoCapitalize="none"
+        />
+        <TextInput
+          style={editSt.input}
+          value={confirmPassword}
+          onChangeText={setConfirmPassword}
+          placeholder="Confirmar nueva contraseña"
+          placeholderTextColor={COLORS.textMuted}
+          secureTextEntry
+          autoCapitalize="none"
+        />
+        <View style={editSt.requirements}>
+          <View style={editSt.requirementRow}>
+            <View style={[editSt.reqDot, { backgroundColor: reqCurrentOk ? COLORS.statusOk : COLORS.statusWarn }]} />
+            <Text style={[editSt.reqText, { color: reqCurrentOk ? COLORS.statusOk : COLORS.textSecondary }]}
+            >Contraseña actual requerida</Text>
+          </View>
+          <View style={editSt.requirementRow}>
+            <View style={[editSt.reqDot, { backgroundColor: reqLengthOk ? COLORS.statusOk : COLORS.statusWarn }]} />
+            <Text style={[editSt.reqText, { color: reqLengthOk ? COLORS.statusOk : COLORS.textSecondary }]}
+            >Nueva contraseña mínimo 8 caracteres</Text>
+          </View>
+          <View style={editSt.requirementRow}>
+            <View style={[editSt.reqDot, { backgroundColor: reqMatchOk ? COLORS.statusOk : COLORS.statusWarn }]} />
+            <Text style={[editSt.reqText, { color: reqMatchOk ? COLORS.statusOk : COLORS.textSecondary }]}
+            >Nueva contraseña y confirmación iguales</Text>
+          </View>
+        </View>
+        {error !== '' && (
+          <Text style={editSt.hint}>{error}</Text>
         )}
         <View style={editSt.actions}>
-          <TouchableOpacity style={editSt.cancelBtn} onPress={onCancel}>
+          <TouchableOpacity style={editSt.cancelBtn} onPress={handleClose}>
             <Text style={editSt.cancelText}>Cancelar</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={[editSt.saveBtn, !isValid && editSt.saveBtnDisabled]}
-            onPress={() => isValid && onSave(value.trim())}
-            disabled={!isValid}
+            onPress={handleSave}
+            disabled={!isValid || saving}
           >
             <Text style={editSt.saveText}>Guardar</Text>
           </TouchableOpacity>
@@ -262,7 +339,6 @@ const editSt = StyleSheet.create({
     padding:         SPACING.xl,
     width:           '100%',
     maxWidth:        360,
-    // ← SHADOW.card en lugar del inexistente SHADOW.panel
     ...SHADOW.card,
   },
   title: {
@@ -273,7 +349,6 @@ const editSt = StyleSheet.create({
   },
   input: {
     borderWidth:       1.5,
-    // ← COLORS.primary en lugar del inexistente COLORS.borderFocus
     borderColor:       COLORS.primary,
     borderRadius:      RADIUS.md,
     paddingHorizontal: SPACING.md,
@@ -282,6 +357,24 @@ const editSt = StyleSheet.create({
     color:             COLORS.textPrimary,
     backgroundColor:   COLORS.bgCard,
     marginBottom:      SPACING.xs,
+  },
+  requirements: {
+    marginTop:    SPACING.xs,
+    marginBottom: SPACING.sm,
+    gap:          6,
+  },
+  requirementRow: {
+    flexDirection: 'row',
+    alignItems:    'center',
+    gap:           SPACING.xs,
+  },
+  reqDot: {
+    width:        8,
+    height:       8,
+    borderRadius: 4,
+  },
+  reqText: {
+    fontSize: TYPOGRAPHY.xs,
   },
   hint: {
     fontSize:     TYPOGRAPHY.xs,
@@ -325,17 +418,15 @@ const editSt = StyleSheet.create({
 // ─── ProfileScreen ────────────────────────────────────────────────────────────
 export function ProfileScreen({ meshNodeId, meshReady }) {
   const { user, logout, guestMode, setUser } = useAuth();
+  const { width, height } = useWindowDimensions();
+  const compactGuest = width < 360 || height < 700;
   const [stats, setStats] = useState({ reportes: 0, alertas: 0, votos: 0, confirmadas: 0 });
 
   const [notifAlertas,  setNotifAlertas ] = useState(true);
   const [notifFeed,     setNotifFeed    ] = useState(true);
   const [modoAnonimo,   setModoAnonimo  ] = useState(false);
   const [ubicacionAuto, setUbicacionAuto] = useState(true);
-  const [editingName,   setEditingName  ] = useState(false);
-  const [savingName,    setSavingName   ] = useState(false);
-  const [displayName,   setDisplayName  ] = useState(
-    user?.nombre ?? user?.nombre_completo ?? 'Estudiante',
-  );
+  const [changingPassword, setChangingPassword] = useState(false);
 
   useEffect(() => {
     if (!guestMode) {
@@ -351,22 +442,6 @@ export function ProfileScreen({ meshNodeId, meshReady }) {
     }
   }, [guestMode]);
 
-  const handleSaveName = useCallback(async (newName) => {
-    setSavingName(true);
-    try {
-      // Llamada a la API para actualizar nombre
-      console.log("Intentando enviar:", { nombre: newName });
-      //await api.actualizarPerfil({ nombre: newName }); 
-      setDisplayName(newName);
-      // Actualizamos el contexto global
-      setUser({ ...user, nombre: newName });
-    } catch (err) {
-      Alert.alert('Error', 'No se pudo actualizar el nombre.');
-    } finally {
-      setSavingName(false);
-      setEditingName(false);
-    }
-  }, [user, setUser]);
 
   const handleLogout = useCallback(() => {
     Alert.alert(
@@ -379,6 +454,7 @@ export function ProfileScreen({ meshNodeId, meshReady }) {
     );
   }, [logout]);
 
+  const displayName = user?.nombre ?? user?.nombre_completo ?? 'Estudiante';
   const initials = displayName
     .split(' ')
     .map((w) => w[0])
@@ -408,9 +484,11 @@ export function ProfileScreen({ meshNodeId, meshReady }) {
             <MaterialIcons name="info-outline" size={18} color="#92400E" />
             <View style={{ flex: 1 }}>
               <Text style={styles.guestBannerTitle}>Modo Invitado</Text>
-              <Text style={styles.guestBannerSub}>
-                Inicia sesión para ver tu perfil completo y acceder a todas las funciones.
-              </Text>
+              {!compactGuest && (
+                <Text style={styles.guestBannerSub}>
+                  Inicia sesión para ver tu perfil completo y acceder a todas las funciones.
+                </Text>
+              )}
             </View>
             <TouchableOpacity style={styles.guestBannerBtn} onPress={logout}>
               <Text style={styles.guestBannerBtnText}>Ingresar</Text>
@@ -424,15 +502,6 @@ export function ProfileScreen({ meshNodeId, meshReady }) {
             <View style={styles.avatar}>
               <Text style={styles.avatarInitials}>{guestMode ? '?' : initials}</Text>
             </View>
-            {!guestMode && (
-              <TouchableOpacity
-                style={styles.avatarEditBtn}
-                onPress={() => setEditingName(true)}
-                activeOpacity={0.8}
-              >
-                <MaterialIcons name="edit" size={14} color="#FFF" />
-              </TouchableOpacity>
-            )}
           </View>
           <Text style={styles.heroName}>
             {guestMode ? 'Invitado' : displayName}
@@ -527,13 +596,10 @@ export function ProfileScreen({ meshNodeId, meshReady }) {
         {/* ── Acciones ── */}
         <SectionCard title="Cuenta" icon="manage-accounts">
           {!guestMode && (
-            <ActionRow icon="edit" label="Editar nombre" onPress={() => setEditingName(true)} />
-          )}
-          {!guestMode && (
             <ActionRow
               icon="lock-reset"
               label="Cambiar contraseña"
-              onPress={() => Alert.alert('Próximamente', 'Disponible en la siguiente versión.')}
+              onPress={() => setChangingPassword(true)}
             />
           )}
           <ActionRow
@@ -544,7 +610,7 @@ export function ProfileScreen({ meshNodeId, meshReady }) {
           <ActionRow
             icon="info-outline"
             label="Acerca de SSEGURO"
-            onPress={() => Alert.alert('SSEGURO v1.0', 'Sistema de Seguridad Comunitaria\nESCOM · IPN · Unidad Zacatenco\n\nDesarrollado como proyecto terminal.')}
+            onPress={() => Alert.alert('SSEGURO v1.0', 'Sistema de Seguridad Comunitaria\nESCOM · IPN · Unidad Zacatenco\n\nDesarrollado como proyecto local.')}
           />
           <ActionRow
             icon="logout"
@@ -560,13 +626,9 @@ export function ProfileScreen({ meshNodeId, meshReady }) {
         </Text>
       </ScrollView>
 
-      {/* Modal edición */}
-      {editingName && (
-        <EditNameModal
-          currentName={displayName}
-          onSave={handleSaveName}
-          onCancel={() => setEditingName(false)}
-        />
+      {/* Modal cambio de contraseña */}
+      {changingPassword && (
+        <ChangePasswordModal onClose={() => setChangingPassword(false)} />
       )}
     </View>
   );
@@ -582,18 +644,18 @@ const styles = StyleSheet.create({
     alignItems:      'flex-start',
     backgroundColor: '#FFFBEB',
     borderRadius:    RADIUS.lg,
-    padding:         SPACING.md,
+    padding:         SPACING.xs,
     marginBottom:    SPACING.md,
     gap:             SPACING.sm,
     borderWidth:     1,
     borderColor:     '#FDE68A',
   },
-  guestBannerTitle:   { fontSize: TYPOGRAPHY.sm, fontWeight: TYPOGRAPHY.fontBold, color: '#92400E' },
-  guestBannerSub:     { fontSize: TYPOGRAPHY.xs, color: '#B45309', lineHeight: 16 },
+  guestBannerTitle:   { fontSize: TYPOGRAPHY.xs - 1, fontWeight: TYPOGRAPHY.fontBold, color: '#92400E' },
+  guestBannerSub:     { fontSize: TYPOGRAPHY.xs - 2, color: '#B45309', lineHeight: 12 },
   guestBannerBtn:     { backgroundColor: COLORS.primary, borderRadius: RADIUS.sm,
-                        paddingHorizontal: SPACING.md, paddingVertical: SPACING.xs,
+                        paddingHorizontal: SPACING.xs, paddingVertical: 4,
                         alignSelf: 'flex-start' },
-  guestBannerBtnText: { color: '#FFF', fontSize: TYPOGRAPHY.xs, fontWeight: TYPOGRAPHY.fontBold },
+  guestBannerBtnText: { color: '#FFF', fontSize: TYPOGRAPHY.xs - 1, fontWeight: TYPOGRAPHY.fontBold },
 
   heroCard: {
     backgroundColor: COLORS.bgCard,

@@ -7,13 +7,14 @@
  *  - NativeEventEmitter solo se crea si el módulo existe
  *  - SafeAreaView deprecado no aplica aquí, pero se documenta
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   NativeEventEmitter,
   NativeModules,
   PermissionsAndroid,
   Platform,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import NearbyMesh from '../services/NearbyMesh';
 import { ESCOM_REGION } from '../constants/theme';
 
@@ -28,7 +29,7 @@ function createNodeId() {
 }
 
 export function useMesh() {
-  const nodeId = useMemo(() => createNodeId(), []);
+  const [nodeId, setNodeId] = useState(null);
 
   const [ready,           setReady]           = useState(false);
   const [starting,        setStarting]        = useState(false);
@@ -145,7 +146,7 @@ export function useMesh() {
 
   // ─── Mesh ─────────────────────────────────────────────────────────────────
   const startMesh = useCallback(async () => {
-    if (starting || ready) return;
+    if (!nodeId || starting || ready) return;
     setStarting(true);
     try {
       const ok = await requestPermissions();
@@ -159,7 +160,7 @@ export function useMesh() {
     } finally {
       setStarting(false);
     }
-  }, [starting, ready, requestPermissions, nodeId, log]);
+  }, [nodeId, starting, ready, requestPermissions, log]);
 
   const stopMesh = useCallback(async () => {
     try {
@@ -222,6 +223,27 @@ export function useMesh() {
 
   // ─── Bootstrap ────────────────────────────────────────────────────────────
   useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const saved = await AsyncStorage.getItem('mesh_node_id');
+        if (saved) {
+          if (mounted) setNodeId(saved);
+          return;
+        }
+        const fresh = createNodeId();
+        await AsyncStorage.setItem('mesh_node_id', fresh);
+        if (mounted) setNodeId(fresh);
+      } catch {
+        const fallback = createNodeId();
+        if (mounted) setNodeId(fallback);
+      }
+    })();
+    return () => { mounted = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!nodeId) return;
     const bootstrap = async () => {
       const granted = await ensureLocationPermission();
       if (!granted) return;
@@ -312,7 +334,7 @@ export function useMesh() {
       NearbyMesh.stopMesh().catch(() => {});
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [nodeId]);
 
   return {
     nodeId, ready, starting, connectedCount, logs, alerts,

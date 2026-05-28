@@ -7,10 +7,9 @@
  *
  * Secciones: map | feed | report | net | profile
  */
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   Platform,
-  SafeAreaView,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -18,17 +17,19 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import api from '../services/api';
 import { NetworkScreen } from './NetworkScreen';
 
 import { useAuth }           from '../context/AuthContext';
-import { useMesh }           from '../hooks/useMesh';
+import { useMeshContext }    from '../context/MeshContext';
 import { useOrientation }    from '../hooks/useOrientation';
 import { HeatMapPanel }      from '../components/HeatMapPanel';
 import { PanicButton }       from '../components/PanicButton';
 import { Sidebar }           from '../components/Sidebar';
 import { GuestBanner }       from '../components/GuestBanner';
+import { GuestReportModal }  from '../components/GuestReportModal';
 import { FeedScreen }        from '../screens/FeedScreen';
 import { ProfileScreen }     from '../screens/ProfileScreen';
 import { CreateReportModal } from '../components/CreateReportModal';
@@ -241,7 +242,7 @@ const hdSt = StyleSheet.create({
 
 export function DashboardScreen() {
   const { user, guestMode, logout } = useAuth();
-  const mesh   = useMesh();
+  const mesh   = useMeshContext();
   const layout = useOrientation();
   const isWide = layout.isLandscape || layout.isTablet;
 
@@ -250,6 +251,8 @@ export function DashboardScreen() {
   const [stats, setStats] = useState({ reportes: 0, cobertura: 0 });
   const [section,      setSection]      = useState('map');
   const [modalVisible, setModalVisible] = useState(false);
+  const [guestReportVisible, setGuestReportVisible] = useState(false);
+  const lastSection = useRef('map');
 
   const cargarDatos = useCallback(async () => {
     try {
@@ -276,6 +279,15 @@ export function DashboardScreen() {
   useEffect(() => {
     if (section === 'report' && !guestMode) {
       setModalVisible(true);
+    }
+  }, [section, guestMode]);
+
+  useEffect(() => {
+    if (section === 'report' && guestMode) {
+      setGuestReportVisible(true);
+      setSection(lastSection.current);
+    } else {
+      lastSection.current = section;
     }
   }, [section, guestMode]);
 
@@ -306,7 +318,6 @@ export function DashboardScreen() {
                 level={stats.cobertura > 80 ? 1 : 2} 
                 coverage={stats.cobertura} 
               />
-              <CommunityCard count={stats.reportes} />
             </View>
 
             <View style={styles.reportsCard}>
@@ -477,6 +488,15 @@ export function DashboardScreen() {
           console.log('Nuevo reporte:', data);
         }}
         guestMode={guestMode}
+      />
+
+      <GuestReportModal
+        visible={guestReportVisible}
+        onClose={() => setGuestReportVisible(false)}
+        onLogin={() => {
+          setGuestReportVisible(false);
+          logout();
+        }}
       />
     </SafeAreaView>
   );

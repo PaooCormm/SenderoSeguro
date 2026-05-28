@@ -148,7 +148,6 @@ class NativeLocationModule(private val reactContext: ReactApplicationContext) :
       }
 
       override fun onProviderDisabled(provider: String) {
-        // Ignorar por ahora
       }
     }
 

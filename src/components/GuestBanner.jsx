@@ -4,12 +4,14 @@
  * las restricciones y un botón para iniciar sesión.
  */
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, useWindowDimensions } from 'react-native';
 import { useAuth } from '../context/AuthContext';
 import { COLORS, SPACING, RADIUS, TYPOGRAPHY } from '../constants/theme';
 
 export function GuestBanner({ onLoginPress }) {
   const { logout } = useAuth();
+  const { width, height } = useWindowDimensions();
+  const compact = width < 360 || height < 700;
 
   return (
     <View style={styles.banner}>
@@ -17,9 +19,11 @@ export function GuestBanner({ onLoginPress }) {
         <Text style={styles.icon}>👤</Text>
         <View>
           <Text style={styles.title}>Modo Invitado</Text>
-          <Text style={styles.sub}>
-            Alertas SOS y reportes deshabilitados
-          </Text>
+          {!compact && (
+            <Text style={styles.sub}>
+              Alertas SOS y reportes deshabilitados
+            </Text>
+          )}
         </View>
       </View>
       <TouchableOpacity
@@ -41,8 +45,8 @@ const styles = StyleSheet.create({
     flexDirection:   'row',
     alignItems:      'center',
     justifyContent:  'space-between',
-    paddingHorizontal: SPACING.base,
-    paddingVertical:   SPACING.sm,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical:   6,
   },
   left: {
     flexDirection: 'row',
@@ -51,26 +55,26 @@ const styles = StyleSheet.create({
     flex:          1,
   },
   icon: {
-    fontSize: 18,
+    fontSize: 14,
   },
   title: {
-    fontSize:   TYPOGRAPHY.sm,
+    fontSize:   TYPOGRAPHY.xs - 1,
     fontWeight: TYPOGRAPHY.fontBold,
     color:      '#92400E',
   },
   sub: {
-    fontSize: TYPOGRAPHY.xs,
+    fontSize: TYPOGRAPHY.xs - 2,
     color:    '#B45309',
   },
   loginBtn: {
     backgroundColor: COLORS.primary,
     borderRadius:    RADIUS.sm,
-    paddingHorizontal: SPACING.md,
-    paddingVertical:   SPACING.xs,
+    paddingHorizontal: SPACING.xs,
+    paddingVertical:   4,
   },
   loginBtnText: {
     color:      '#FFF',
-    fontSize:   TYPOGRAPHY.xs,
+    fontSize:   TYPOGRAPHY.xs - 1,
     fontWeight: TYPOGRAPHY.fontBold,
   },
 });

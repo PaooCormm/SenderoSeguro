@@ -7,13 +7,14 @@
  * objeto_sospechoso, riesgo_ambiental, transporte_movilidad,
  * seguridad_preventiva, otro
  *
- * Fallback a datos mock si no hay red.
+ * Cache local si no hay red.
  */
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   TextInput, ActivityIndicator, RefreshControl,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialIcons } from '@expo/vector-icons';
 import { COLORS, SPACING, RADIUS, TYPOGRAPHY, SHADOW } from '../constants/theme';
 import { Divider, SectionHeader } from '../components/UIElements';
@@ -54,45 +55,7 @@ const FILTROS = [
   { id: 'otro',                label: 'Otro',        icon: 'help-outline'   },
 ];
 
-// ─── Datos mock (fallback sin red) ────────────────────────────────────────────
-const MOCK = [
-  {
-    id: 'mock1', categoria: 'robo', es_anonimo: false,
-    titulo: 'Persona sospechosa en acceso norte',
-    descripcion: 'Individuo sin credencial rondando la entrada de Unidad Profesional.',
-    ubicacion_txt: 'Acceso Norte — Av. Juan de Dios Bátiz',
-    utiles: 14, estado: 'verificado',
-    created_at: new Date(Date.now() - 8 * 60000).toISOString(),
-    autor: '@est_2022080124',
-  },
-  {
-    id: 'mock2', categoria: 'infraestructura', es_anonimo: true,
-    titulo: 'Lámpara fundida — Pasillo central ESCOM',
-    descripcion: 'La luminaria entre Edificio A y cafetería está apagada desde ayer.',
-    ubicacion_txt: 'Pasillo Central — Edificio A',
-    utiles: 9, estado: 'pendiente',
-    created_at: new Date(Date.now() - 22 * 60000).toISOString(),
-    autor: 'Anónimo',
-  },
-  {
-    id: 'mock3', categoria: 'persona_sospechosa', es_anonimo: false,
-    titulo: 'Bache peligroso — entrada peatonal',
-    descripcion: 'Bache profundo en la banqueta por Wilfrido Massieu. Ya causó una caída.',
-    ubicacion_txt: 'Acceso peatonal — Wilfrido Massieu',
-    utiles: 32, estado: 'pendiente',
-    created_at: new Date(Date.now() - 86400000).toISOString(),
-    autor: '@est_2021560088',
-  },
-  {
-    id: 'mock4', categoria: 'seguridad_preventiva', es_anonimo: false,
-    titulo: 'Patrullaje preventivo — Estacionamiento Sur',
-    descripcion: 'Guardia de seguridad realizó ronda. Sin incidentes.',
-    ubicacion_txt: 'Estacionamiento Sur — Unidad Zacatenco',
-    utiles: 3, estado: 'resuelto',
-    created_at: new Date(Date.now() - 10800000).toISOString(),
-    autor: '@vigilancia_ipn',
-  },
-];
+const CACHE_KEY = 'sendero_cached_reports';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function tiempoRelativo(iso) {
@@ -113,7 +76,7 @@ function tiempoRelativo(iso) {
 // ─── Tarjeta de reporte ───────────────────────────────────────────────────────
 function ReportCard({ item, guestMode }) {
   const [utiles, setUtiles ] = useState(item.utiles ?? 0);
-  const [votado, setVotado ] = useState(false);
+  const [votado, setVotado ] = useState(Boolean(item.likedByMe));
   const [voting, setVoting ] = useState(false);
 
   const cfg    = CATEGORIA_CONFIG[item.categoria] ?? CATEGORIA_CONFIG.otro;
@@ -219,7 +182,6 @@ export function FeedScreen({ guestMode, onNewReport, style }) {
   const [error,      setError     ] = useState('');
   const [filtro,     setFiltro    ] = useState('todos');
   const [busqueda,   setBusqueda  ] = useState('');
-  const [esMock,     setEsMock    ] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
 
   const cargar = useCallback(async (isRefresh = false) => {
@@ -228,8 +190,6 @@ export function FeedScreen({ guestMode, onNewReport, style }) {
     setError('');
 
     try {
-      if (guestMode) throw new Error('guest');
-
       const params = {};
       if (filtro !== 'todos') params.categoria = filtro;
 
@@ -238,11 +198,16 @@ export function FeedScreen({ guestMode, onNewReport, style }) {
       // La API puede devolver { data: [] } o directamente []
       const lista = Array.isArray(res) ? res : (res.data ?? res.reports ?? []);
       setReportes(lista);
-      setEsMock(false);
+      await AsyncStorage.setItem(CACHE_KEY, JSON.stringify(lista));
     } catch {
-      setReportes(MOCK);
-      setEsMock(true);
-      if (!guestMode) setError('Sin conexión — mostrando datos de ejemplo.');
+      const cached = await AsyncStorage.getItem(CACHE_KEY);
+      if (cached) {
+        setReportes(JSON.parse(cached));
+        setError('Sin conexión — mostrando últimos reportes.');
+      } else {
+        setReportes([]);
+        setError('Sin conexión.');
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -292,10 +257,10 @@ export function FeedScreen({ guestMode, onNewReport, style }) {
       </View>
 
       {/* Banner sin red */}
-      {esMock && !guestMode && (
+      {error !== '' && (
         <View style={styles.warnBanner}>
           <MaterialIcons name="wifi-off" size={14} color="#92400E" />
-          <Text style={styles.warnBannerText}>Sin conexión — datos de ejemplo</Text>
+          <Text style={styles.warnBannerText}>{error}</Text>
         </View>
       )}
 

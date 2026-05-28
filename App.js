@@ -16,6 +16,7 @@ import {
 } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
+import { MeshProvider } from './src/context/MeshContext';
 import { LoginScreen }     from './src/screens/LoginScreen';
 import { DashboardScreen } from './src/screens/DashboardScreen';
 
@@ -57,7 +58,9 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <AuthProvider>
-        <AppNavigator />
+        <MeshProvider>
+          <AppNavigator />
+        </MeshProvider>
       </AuthProvider>
     </SafeAreaProvider>
   );
